@@ -7,8 +7,6 @@ export type CompanyInfo = {
   rawText: string;
 };
 
-const WS_ENDPOINT = `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_API_KEY ?? ""}`;
-
 function pickByRegex(text: string, regexes: RegExp[], fallback = ""): string {
   for (const regex of regexes) {
     const matched = text.match(regex);
@@ -21,11 +19,17 @@ function pickByRegex(text: string, regexes: RegExp[], fallback = ""): string {
 
 export async function scrapeCompanyInfo(url: string): Promise<CompanyInfo> {
   if (!process.env.BROWSERLESS_API_KEY) {
-    throw new Error("BROWSERLESS_API_KEY が未設定です。");
+    throw new Error("BROWSERLESS_API_KEYが未設定です");
   }
 
-  const browser = await puppeteer.connect({ browserWSEndpoint: WS_ENDPOINT });
+  console.log("BROWSERLESS:", process.env.BROWSERLESS_API_KEY ? "OK" : "NG");
+
+  let browser;
   try {
+    browser = await puppeteer.connect({
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${process.env.BROWSERLESS_API_KEY}`,
+    });
+
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
 
@@ -57,7 +61,10 @@ export async function scrapeCompanyInfo(url: string): Promise<CompanyInfo> {
       phone,
       rawText: pageText.slice(0, 5000),
     };
+  } catch (error) {
+    console.error(error);
+    throw error;
   } finally {
-    await browser.close();
+    await browser?.close();
   }
 }
