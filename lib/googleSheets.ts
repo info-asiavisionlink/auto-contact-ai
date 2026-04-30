@@ -1,5 +1,6 @@
 import "dotenv/config";
-import { google } from "googleapis";
+import axios from "axios";
+import Papa from "papaparse";
 
 export type OwnCompanyProfile = {
   company_name: string;
@@ -45,6 +46,8 @@ const PROFILE_KEYS: Array<keyof OwnCompanyProfile> = [
   "cta_message",
 ];
 
+type ParsedRow = Record<string, string | undefined>;
+
 export async function getCompanyProfileFromSheet(): Promise<OwnCompanyProfile> {
   const sheetId = process.env.GOOGLE_SHEET_ID;
   if (!sheetId) {
@@ -52,29 +55,25 @@ export async function getCompanyProfileFromSheet(): Promise<OwnCompanyProfile> {
   }
 
   try {
-    const auth = new google.auth.GoogleAuth({
-      keyFile: "credentials.json",
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+    const response = await axios.get<string>(csvUrl);
+    const parsed = Papa.parse<ParsedRow>(response.data, {
+      header: true,
+      skipEmptyLines: true,
     });
 
-    const sheets = google.sheets({ version: "v4", auth });
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
-      range: "Lラン会社概要!A2:S2",
-    });
-
-    const values = response.data.values?.[0] ?? [];
-    if (!values.length) {
-      throw new Error("スプレッドシートにデータがありません。");
-    }
+    const row = parsed.data[0];
+    if (!row) throw new Error("empty");
 
     const profile = PROFILE_KEYS.reduce((acc, key, index) => {
-      acc[key] = values[index]?.toString().trim() ?? "";
+      const fromHeader = row[key];
+      const fromIndex = Object.values(row)[index];
+      acc[key] = (fromHeader ?? fromIndex ?? "").toString().trim();
       return acc;
     }, {} as OwnCompanyProfile);
 
     return profile;
   } catch {
-    throw new Error("Googleスプレッドシートの取得に失敗しました");
+    throw new Error("スプレッドシート取得失敗");
   }
 }
