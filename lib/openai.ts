@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { CompanyInfo } from "./scraper";
 import type { FormField } from "./formParser";
+import type { OwnCompanyProfile } from "./googleSheets";
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -17,7 +18,7 @@ type GenerationResult = {
 };
 
 export async function generateSalesAndFields(params: {
-  ownCompanyInfo: string;
+  ownCompanyInfo: OwnCompanyProfile;
   targetCompany: CompanyInfo;
   formFields: FormField[];
 }): Promise<GenerationResult> {
@@ -32,8 +33,8 @@ export async function generateSalesAndFields(params: {
 以下の情報を使って、自然で丁寧な営業文と、問い合わせフォーム各項目に入れる最適な入力値を作成してください。
 出力は必ずJSONのみ。
 
-## 自社情報
-${ownCompanyInfo}
+## 自社情報（スプレッドシート）
+${JSON.stringify(ownCompanyInfo, null, 2)}
 
 ## 相手企業情報
 会社名: ${targetCompany.companyName}

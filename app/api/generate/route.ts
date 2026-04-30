@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { scrapeCompanyInfo } from "@/lib/scraper";
 import { parseFormFields } from "@/lib/formParser";
-import { getGoogleDocText } from "@/lib/googleDocs";
+import { getCompanyProfileFromSheet } from "@/lib/googleSheets";
 import { generateSalesAndFields } from "@/lib/openai";
 
 export async function POST(req: Request) {
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     const [companyInfo, formFields, ownCompanyInfo] = await Promise.all([
       scrapeCompanyInfo(companyUrl),
       parseFormFields(contactUrl),
-      getGoogleDocText(),
+      getCompanyProfileFromSheet(),
     ]);
 
     const generated = await generateSalesAndFields({

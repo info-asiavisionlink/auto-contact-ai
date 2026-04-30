@@ -99,7 +99,7 @@ export default function HomePage() {
 
       {loading && (
         <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-4 text-blue-700">
-          処理中です。スクレイピングと営業文生成を実行しています...
+          処理中です。自社情報を読み込み中（スプレッドシート）...
         </div>
       )}
 
