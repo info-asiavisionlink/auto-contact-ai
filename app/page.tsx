@@ -19,6 +19,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApiResult | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const isDisabled = useMemo(
     () => !companyUrl.trim() || !contactUrl.trim() || loading,
@@ -53,6 +54,14 @@ export default function HomePage() {
 
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
+  };
+
+  const handleCopyWithFeedback = async (text: string, key: string) => {
+    await handleCopy(text);
+    setCopiedKey(key);
+    window.setTimeout(() => {
+      setCopiedKey((prev) => (prev === key ? null : prev));
+    }, 1500);
   };
 
   return (
@@ -111,9 +120,12 @@ export default function HomePage() {
 
       {result && (
         <section className="mt-8 space-y-3">
-          {result.generatedFields.map((item, idx) => (
+          {result.generatedFields.map((item, idx) => {
+            const key = `${item.fieldName}-${idx}`;
+            const copied = copiedKey === key;
+            return (
             <article
-              key={`${item.fieldName}-${idx}`}
+              key={key}
               className="flex items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm"
             >
               <div className="min-w-0">
@@ -126,13 +138,18 @@ export default function HomePage() {
               </div>
               <button
                 type="button"
-                onClick={() => handleCopy(item.value)}
-                className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100"
+                onClick={() => handleCopyWithFeedback(item.value, key)}
+                className={`shrink-0 rounded-lg border px-3 py-1.5 text-sm transition duration-200 hover:opacity-90 ${
+                  copied
+                    ? "scale-105 border-emerald-300 bg-emerald-50 text-emerald-700"
+                    : "border-slate-300 bg-white hover:bg-slate-100"
+                }`}
               >
-                コピー
+                {copied ? "コピーしました" : "コピー"}
               </button>
             </article>
-          ))}
+            );
+          })}
         </section>
       )}
     </main>

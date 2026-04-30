@@ -29,19 +29,42 @@ export async function POST(req: Request) {
       formFields,
     });
 
-    const fieldsWithFallback = generated.fields.map((field) => ({
-      ...field,
-      value:
-        field.fieldName.includes("内容") && !field.value
-          ? generated.salesMessage
-          : field.value,
-    }));
+    const fieldsWithFallback = generated.fields.map((field) => {
+      const name = field.fieldName.toLowerCase();
+      const isMessageField =
+        name.includes("内容") ||
+        name.includes("お問い合わせ") ||
+        name.includes("message") ||
+        name.includes("本文");
+
+      return {
+        ...field,
+        value: isMessageField ? generated.salesMessage : field.value,
+      };
+    });
+
+    const hasMessageField = fieldsWithFallback.some((field) => {
+      const name = field.fieldName.toLowerCase();
+      return (
+        name.includes("内容") ||
+        name.includes("お問い合わせ") ||
+        name.includes("message") ||
+        name.includes("本文")
+      );
+    });
+
+    const finalFields = hasMessageField
+      ? fieldsWithFallback
+      : [
+          ...fieldsWithFallback,
+          { fieldName: "お問い合わせ内容", value: generated.salesMessage },
+        ];
 
     return NextResponse.json({
       companyInfo,
       formFields,
       salesMessage: generated.salesMessage,
-      generatedFields: fieldsWithFallback,
+      generatedFields: finalFields,
     });
   } catch (error) {
     const message =

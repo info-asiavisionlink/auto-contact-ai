@@ -17,6 +17,26 @@ type GenerationResult = {
   fields: GeneratedField[];
 };
 
+function normalizeGeneratedMessage(
+  baseMessage: string,
+  ownCompanyInfo: OwnCompanyProfile,
+): string {
+  const trimmed = baseMessage.trim();
+  const sections = [trimmed];
+
+  if (ownCompanyInfo.lp_url) {
+    sections.push(`サービス詳細：\n${ownCompanyInfo.lp_url}`);
+  }
+  if (ownCompanyInfo.document_url) {
+    sections.push(`資料はこちら：\n${ownCompanyInfo.document_url}`);
+  }
+  if (ownCompanyInfo.line_url) {
+    sections.push(`お問い合わせ：\n${ownCompanyInfo.line_url}`);
+  }
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
 export async function generateSalesAndFields(params: {
   ownCompanyInfo: OwnCompanyProfile;
   targetCompany: CompanyInfo;
@@ -44,6 +64,27 @@ ${JSON.stringify(ownCompanyInfo, null, 2)}
 
 ## 問い合わせフォーム項目
 ${JSON.stringify(formFields, null, 2)}
+
+## 営業文ルール（厳守）
+- 約300文字
+- 営業マンレベルの説得力
+- 相手企業とのマッチング理由を明確化
+- 自社サービス（エルラン）の内容を具体的に説明
+- CTAを必ず入れる
+- 次の構成で作成する：
+  1) 相手に合わせた導入
+  2) 課題仮説
+  3) 自社サービス説明
+  4) マッチング理由
+  5) CTA
+- URLが空でなければ自然に含める：
+  - サービス詳細 → lp_url
+  - 資料 → document_url
+  - お問い合わせ → line_url
+
+## フォーム入力ルール（厳守）
+- 「内容」「お問い合わせ内容」「message」「本文」に該当する項目の value は salesMessage と同じ内容にすること
+- 氏名、メール、電話は自社情報の担当者情報を優先して埋めること
 
 ## 出力フォーマット
 {
@@ -91,5 +132,21 @@ ${JSON.stringify(formFields, null, 2)}
     throw new Error("OpenAIレスポンスの解析に失敗しました。");
   }
 
-  return JSON.parse(text) as GenerationResult;
+  const parsed = JSON.parse(text) as GenerationResult;
+  const salesMessage = normalizeGeneratedMessage(parsed.salesMessage, ownCompanyInfo);
+  const fields = parsed.fields.map((field) => {
+    const name = field.fieldName.toLowerCase();
+    const isMessageField =
+      name.includes("内容") ||
+      name.includes("お問い合わせ") ||
+      name.includes("message") ||
+      name.includes("本文");
+
+    if (isMessageField) {
+      return { ...field, value: salesMessage };
+    }
+    return field;
+  });
+
+  return { salesMessage, fields };
 }
