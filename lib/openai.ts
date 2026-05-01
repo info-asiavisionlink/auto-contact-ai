@@ -7,92 +7,116 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-type GeneratedField = {
-  fieldName: string;
-  value: string;
-};
-
-type GenerationResult = {
+type SalesMessageResult = {
   salesMessage: string;
-  fields: GeneratedField[];
 };
 
-function normalizeGeneratedMessage(
-  baseMessage: string,
-  ownCompanyInfo: OwnCompanyProfile,
+/** 空でない lp_url / document_url / line_url は営業文に必ず含める（欠けていれば末尾に自然な形で追記） */
+function ensureSalesMessageIncludesUrls(
+  salesMessage: string,
+  profile: OwnCompanyProfile,
 ): string {
-  const trimmed = baseMessage.trim();
-  const sections = [trimmed];
+  let out = salesMessage.trim();
+  const lp = profile.lp_url?.trim() ?? "";
+  const doc = profile.document_url?.trim() ?? "";
+  const line = profile.line_url?.trim() ?? "";
 
-  if (ownCompanyInfo.lp_url) {
-    sections.push(`サービス詳細：\n${ownCompanyInfo.lp_url}`);
-  }
-  if (ownCompanyInfo.document_url) {
-    sections.push(`資料はこちら：\n${ownCompanyInfo.document_url}`);
-  }
-  if (ownCompanyInfo.line_url) {
-    sections.push(`お問い合わせ：\n${ownCompanyInfo.line_url}`);
-  }
+  const appendIfMissing = (url: string, lead: string) => {
+    if (!url) return;
+    if (out.includes(url)) return;
+    const block = `${lead}\n${url}`;
+    out = out ? `${out}\n\n${block}` : block;
+  };
 
-  return sections.filter(Boolean).join("\n\n");
+  appendIfMissing(lp, "サービス詳細はこちら：");
+  appendIfMissing(doc, "資料はこちら：");
+  appendIfMissing(line, "お問い合わせ：");
+
+  return out;
 }
 
-export async function generateSalesAndFields(params: {
+/**
+ * 営業文のみ生成する。相手企業のスクレイプ情報は文面の最適化にのみ使用し、
+ * フォーム入力値は生成しない（自社スプレッドシートで別途埋める）。
+ */
+export async function generateSalesMessage(params: {
   ownCompanyInfo: OwnCompanyProfile;
   targetCompany: CompanyInfo;
   formFields: FormField[];
-}): Promise<GenerationResult> {
+}): Promise<SalesMessageResult> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY が未設定です。");
   }
 
   const { ownCompanyInfo, targetCompany, formFields } = params;
 
+  const lp = ownCompanyInfo.lp_url?.trim() ?? "";
+  const doc = ownCompanyInfo.document_url?.trim() ?? "";
+  const line = ownCompanyInfo.line_url?.trim() ?? "";
+
+  const urlRules =
+    [
+      lp &&
+        `lp_url が空でない（現在: 設定あり）→ 必ずそのURL文字列をそのまま含める。文末のCTA付近に「サービス詳細はこちら：」等で自然に誘導してよい。`,
+      doc &&
+        `document_url が空でない（現在: 設定あり）→ 必ず含める。「資料はこちら：」等で自然に。`,
+      line &&
+        `line_url が空でない（現在: 設定あり）→ 必ず含める。「お問い合わせ：」等で自然に。`,
+    ]
+      .filter(Boolean)
+      .join("\n") ||
+    "（lp_url / document_url / line_url はすべて空のため、URLの追記は不要）";
+
+  const ctaHint =
+    ownCompanyInfo.cta_message?.trim() ||
+    "次の一手として、資料確認やお打ち合わせをお願いする";
+
   const prompt = `
-あなたは法人営業のアシスタントです。
-以下の情報を使って、自然で丁寧な営業文と、問い合わせフォーム各項目に入れる最適な入力値を作成してください。
-出力は必ずJSONのみ。
+あなたは法人営業のプロです。説得力のある営業メッセージを、1本の自然な文章として書いてください。
+
+## 目的
+お問い合わせフォームに貼れる「営業メッセージ」1通分。読み手は相手企業の担当者。
+
+## 文体・トーン
+- 営業マンが対面・メールで書くレベルの具体性と説得力。過度な敬語の羅列は避け、簡潔に熱量を出す。
+- 相手企業の事業・文脈に触れたうえで、なぜ今話すべきかが伝わること。
+
+## 長さ
+- 本文のボリュームは**おおよそ300文字**を目安（漢字・かな混じり。280～340字程度で調整）。
+- 空でないURLを本文に埋め込む場合は、全体がやや長くなってもよいが、冗長にしない。
+
+## 必須の論理構成（出力では番号・見出しを付けない。1つの自然な文章に溶け込ませる）
+思考の順序として次を**必ず**含める：
+① **導入**：相手企業の事業・サイト上の特徴に触れ、関心を引く（相手企業名や補足テキストを参照）。
+② **課題仮説**：その企業でありがちな課題・機会を1つに絞った仮説を短く提示。
+③ **エルランの説明**：自社サービス**「エルラン」**を明示し、スプレッドシートの service_name / service_description / service_detail / strength / unique_value 等に基づき、何をどう解決するサービスかを具体的に説明する（エルラン＝自社の核サービスとして扱う）。
+④ **マッチング理由**：なぜその相手にエルランが合うのかを1～2文で論じる。
+⑤ **CTA + URL**：行動喚起を必ず入れる。スプレッドシートの cta_message の意図を汲み、次の一手を明確に。空でない lp_url / document_url / line_url は**必ず**文中に埋め込む（下記ルール）。
+
+## CTAのベース文言（必要に応じて言い換え・短縮してよい）
+${ctaHint}
+
+## 厳守
+- 相手企業のスクレイプ情報は、パーソナライズと仮説づくりにのみ使う。相手の連絡先・社名を自社と取り違えない。
+- 自社の事実・サービス内容はスプレッドシートに基づく。捏造しない。
+- フォーム用の個別入力値（氏名・メール等）は生成しない。営業メッセージ本文のみ。
+
+## 自社URL（スプレッドシート）— 空でなければ必ず本文に含める
+${urlRules}
 
 ## 自社情報（スプレッドシート）
 ${JSON.stringify(ownCompanyInfo, null, 2)}
 
-## 相手企業情報
+## 相手企業（仮説・導入の参考。入力値には使わない）
 会社名: ${targetCompany.companyName}
-住所: ${targetCompany.address}
-電話番号: ${targetCompany.phone}
 補足テキスト: ${targetCompany.rawText}
 
-## 問い合わせフォーム項目
+## 問い合わせフォームの構造（参考のみ）
 ${JSON.stringify(formFields, null, 2)}
 
-## 営業文ルール（厳守）
-- 約300文字
-- 営業マンレベルの説得力
-- 相手企業とのマッチング理由を明確化
-- 自社サービス（エルラン）の内容を具体的に説明
-- CTAを必ず入れる
-- 次の構成で作成する：
-  1) 相手に合わせた導入
-  2) 課題仮説
-  3) 自社サービス説明
-  4) マッチング理由
-  5) CTA
-- URLが空でなければ自然に含める：
-  - サービス詳細 → lp_url
-  - 資料 → document_url
-  - お問い合わせ → line_url
-
-## フォーム入力ルール（厳守）
-- 「内容」「お問い合わせ内容」「message」「本文」に該当する項目の value は salesMessage と同じ内容にすること
-- 氏名、メール、電話は自社情報の担当者情報を優先して埋めること
-
-## 出力フォーマット
-{
-  "salesMessage": "営業文",
-  "fields": [
-    { "fieldName": "項目名", "value": "入力値" }
-  ]
-}
+## 出力形式
+次のJSONのみ返す。salesMessage には番号・箇条書き・見出しを付けず、**1つの連続した文章**（必要なら句読点のみ）とする。URLは文中に自然に挿入してよい。
+{ "salesMessage": "営業メッセージ本文" }
 `;
 
   const response = await client.responses.create({
@@ -101,25 +125,13 @@ ${JSON.stringify(formFields, null, 2)}
     text: {
       format: {
         type: "json_schema",
-        name: "sales_form_output",
+        name: "sales_message_only",
         schema: {
           type: "object",
           properties: {
             salesMessage: { type: "string" },
-            fields: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  fieldName: { type: "string" },
-                  value: { type: "string" },
-                },
-                required: ["fieldName", "value"],
-                additionalProperties: false,
-              },
-            },
           },
-          required: ["salesMessage", "fields"],
+          required: ["salesMessage"],
           additionalProperties: false,
         },
         strict: true,
@@ -132,21 +144,11 @@ ${JSON.stringify(formFields, null, 2)}
     throw new Error("OpenAIレスポンスの解析に失敗しました。");
   }
 
-  const parsed = JSON.parse(text) as GenerationResult;
-  const salesMessage = normalizeGeneratedMessage(parsed.salesMessage, ownCompanyInfo);
-  const fields = parsed.fields.map((field) => {
-    const name = field.fieldName.toLowerCase();
-    const isMessageField =
-      name.includes("内容") ||
-      name.includes("お問い合わせ") ||
-      name.includes("message") ||
-      name.includes("本文");
-
-    if (isMessageField) {
-      return { ...field, value: salesMessage };
-    }
-    return field;
-  });
-
-  return { salesMessage, fields };
+  const parsed = JSON.parse(text) as SalesMessageResult;
+  return {
+    salesMessage: ensureSalesMessageIncludesUrls(
+      parsed.salesMessage,
+      ownCompanyInfo,
+    ),
+  };
 }

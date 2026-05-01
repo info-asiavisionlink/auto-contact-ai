@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type GeneratedField = {
   fieldName: string;
@@ -13,13 +20,52 @@ type ApiResult = {
   error?: string;
 };
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleClick = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      return;
+    }
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setCopied(true);
+    timeoutRef.current = setTimeout(() => {
+      setCopied(false);
+      timeoutRef.current = null;
+    }, 1500);
+  }, [text]);
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      aria-live="polite"
+      className={`shrink-0 rounded-lg border px-3.5 py-2 text-sm font-medium shadow-sm outline-none transition-all duration-200 ease-out focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:ring-offset-2 active:scale-[0.96] ${
+        copied
+          ? "scale-[1.02] border-emerald-600 bg-emerald-100 text-emerald-900 shadow-emerald-500/10"
+          : "border-slate-300 bg-white text-slate-800 hover:scale-[1.03] hover:border-emerald-500 hover:bg-emerald-50/90 hover:text-emerald-900 hover:shadow-md"
+      }`}
+    >
+      {copied ? "コピーしました" : "コピー"}
+    </button>
+  );
+}
+
 export default function HomePage() {
   const [companyUrl, setCompanyUrl] = useState("");
   const [contactUrl, setContactUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApiResult | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const isDisabled = useMemo(
     () => !companyUrl.trim() || !contactUrl.trim() || loading,
@@ -50,18 +96,6 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleCopy = async (text: string) => {
-    await navigator.clipboard.writeText(text);
-  };
-
-  const handleCopyWithFeedback = async (text: string, key: string) => {
-    await handleCopy(text);
-    setCopiedKey(key);
-    window.setTimeout(() => {
-      setCopiedKey((prev) => (prev === key ? null : prev));
-    }, 1500);
   };
 
   return (
@@ -120,12 +154,9 @@ export default function HomePage() {
 
       {result && (
         <section className="mt-8 space-y-3">
-          {result.generatedFields.map((item, idx) => {
-            const key = `${item.fieldName}-${idx}`;
-            const copied = copiedKey === key;
-            return (
+          {result.generatedFields.map((item, idx) => (
             <article
-              key={key}
+              key={`${item.fieldName}-${idx}`}
               className="flex items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm"
             >
               <div className="min-w-0">
@@ -136,20 +167,9 @@ export default function HomePage() {
                   {item.value}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => handleCopyWithFeedback(item.value, key)}
-                className={`shrink-0 rounded-lg border px-3 py-1.5 text-sm transition duration-200 hover:opacity-90 ${
-                  copied
-                    ? "scale-105 border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : "border-slate-300 bg-white hover:bg-slate-100"
-                }`}
-              >
-                {copied ? "コピーしました" : "コピー"}
-              </button>
+              <CopyButton text={item.value} />
             </article>
-            );
-          })}
+          ))}
         </section>
       )}
     </main>

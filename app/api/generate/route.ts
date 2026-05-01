@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { scrapeCompanyInfo } from "@/lib/scraper";
 import { parseFormFields } from "@/lib/formParser";
 import { getCompanyProfileFromSheet } from "@/lib/googleSheets";
-import { generateSalesAndFields } from "@/lib/openai";
+import { generateSalesMessage } from "@/lib/openai";
+import { buildFormFieldValues } from "@/lib/formFieldValues";
 
 export async function POST(req: Request) {
   try {
@@ -23,48 +24,23 @@ export async function POST(req: Request) {
       getCompanyProfileFromSheet(),
     ]);
 
-    const generated = await generateSalesAndFields({
+    const { salesMessage } = await generateSalesMessage({
       ownCompanyInfo,
       targetCompany: companyInfo,
       formFields,
     });
 
-    const fieldsWithFallback = generated.fields.map((field) => {
-      const name = field.fieldName.toLowerCase();
-      const isMessageField =
-        name.includes("内容") ||
-        name.includes("お問い合わせ") ||
-        name.includes("message") ||
-        name.includes("本文");
-
-      return {
-        ...field,
-        value: isMessageField ? generated.salesMessage : field.value,
-      };
-    });
-
-    const hasMessageField = fieldsWithFallback.some((field) => {
-      const name = field.fieldName.toLowerCase();
-      return (
-        name.includes("内容") ||
-        name.includes("お問い合わせ") ||
-        name.includes("message") ||
-        name.includes("本文")
-      );
-    });
-
-    const finalFields = hasMessageField
-      ? fieldsWithFallback
-      : [
-          ...fieldsWithFallback,
-          { fieldName: "お問い合わせ内容", value: generated.salesMessage },
-        ];
+    const generatedFields = buildFormFieldValues(
+      formFields,
+      ownCompanyInfo,
+      salesMessage,
+    );
 
     return NextResponse.json({
       companyInfo,
       formFields,
-      salesMessage: generated.salesMessage,
-      generatedFields: finalFields,
+      salesMessage,
+      generatedFields,
     });
   } catch (error) {
     const message =
