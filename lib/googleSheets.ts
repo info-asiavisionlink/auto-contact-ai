@@ -2,10 +2,16 @@ import "dotenv/config";
 import axios from "axios";
 import Papa from "papaparse";
 
+/**
+ * スプレッドシート想定カラム:
+ * company_name, name, phone, email, postcode, address, service_*, …, lp_url, document_url, line_url, cta_message
+ * および従来の contact_person_* ヘッダにも対応
+ */
 export type OwnCompanyProfile = {
   company_name: string;
   email: string;
   phone: string;
+  postcode: string;
   address: string;
   service_name: string;
   service_description: string;
@@ -24,29 +30,47 @@ export type OwnCompanyProfile = {
   cta_message: string;
 };
 
-const PROFILE_KEYS: Array<keyof OwnCompanyProfile> = [
-  "company_name",
-  "email",
-  "phone",
-  "address",
-  "service_name",
-  "service_description",
-  "service_detail",
-  "price_plan",
-  "strength",
-  "unique_value",
-  "case_study",
-  "sales_style",
-  "contact_person_name",
-  "contact_person_email",
-  "contact_person_phone",
-  "lp_url",
-  "document_url",
-  "line_url",
-  "cta_message",
-];
-
 type ParsedRow = Record<string, string | undefined>;
+
+function cell(row: ParsedRow, keys: string[]): string {
+  for (const k of keys) {
+    const v = row[k];
+    if (v !== undefined && String(v).trim() !== "") {
+      return String(v).trim();
+    }
+  }
+  return "";
+}
+
+/** ヘッダ名のみでマッピング（列順フォールバックは使わない） */
+function normalizeProfileFromRow(row: ParsedRow): OwnCompanyProfile {
+  const email = cell(row, ["contact_person_email", "email"]);
+  const phone = cell(row, ["contact_person_phone", "phone"]);
+  const contactName = cell(row, ["contact_person_name", "name"]);
+
+  return {
+    company_name: cell(row, ["company_name"]),
+    email,
+    phone,
+    postcode: cell(row, ["postcode", "zip", "postal_code", "郵便番号"]),
+    address: cell(row, ["address"]),
+    service_name: cell(row, ["service_name"]),
+    service_description: cell(row, ["service_description"]),
+    service_detail: cell(row, ["service_detail"]),
+    price_plan: cell(row, ["price_plan"]),
+    strength: cell(row, ["strength"]),
+    unique_value: cell(row, ["unique_value"]),
+    case_study: cell(row, ["case_study"]),
+    sales_style: cell(row, ["sales_style"]),
+    contact_person_name: contactName,
+    contact_person_email: email,
+    contact_person_phone: phone,
+    lp_url: cell(row, ["lp_url"]),
+    document_url: cell(row, ["document_url"]),
+    line_url: cell(row, ["line_url"]),
+    cta_message: cell(row, ["cta_message"]),
+  };
+}
 
 export async function getCompanyProfileFromSheet(): Promise<OwnCompanyProfile> {
   const sheetId = process.env.GOOGLE_SHEET_ID;
@@ -65,14 +89,7 @@ export async function getCompanyProfileFromSheet(): Promise<OwnCompanyProfile> {
     const row = parsed.data[0];
     if (!row) throw new Error("empty");
 
-    const profile = PROFILE_KEYS.reduce((acc, key, index) => {
-      const fromHeader = row[key];
-      const fromIndex = Object.values(row)[index];
-      acc[key] = (fromHeader ?? fromIndex ?? "").toString().trim();
-      return acc;
-    }, {} as OwnCompanyProfile);
-
-    return profile;
+    return normalizeProfileFromRow(row);
   } catch {
     throw new Error("スプレッドシート取得失敗");
   }
