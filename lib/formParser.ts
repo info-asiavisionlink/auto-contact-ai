@@ -11,7 +11,10 @@ export type FormField = {
   type?: string;
   name: string;
   placeholder: string;
+  /** 画面表示・マッピング用（整形済み） */
   label: string;
+  /** 抽出直後（デバッグ用） */
+  rawLabel: string;
 };
 
 export type ParseFormOutcome = {
@@ -38,16 +41,119 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
     await page.goto(url, GOTO_OPTIONS);
 
     const fields = await page.evaluate(() => {
-      const getLabel = (el: Element): string => {
-        const id = el.getAttribute("id");
-        if (id) {
-          const label = document.querySelector(`label[for="${id}"]`);
-          if (label?.textContent) return label.textContent.trim();
+      function escapeForAttributeSelector(id: string): string {
+        if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+          return CSS.escape(id);
         }
-        const parentLabel = el.closest("label");
-        if (parentLabel?.textContent) return parentLabel.textContent.trim();
+        return id.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      }
+
+      function cleanLabelText(s: string): string {
+        return s
+          .replace(/※\s*必須?/gi, "")
+          .replace(/\(\s*必須\s*\)/gi, "")
+          .replace(/\[\s*必須\s*\]/gi, "")
+          .replace(/\*\s*必須?/gi, "")
+          .replace(/【\s*必須\s*】/gi, "")
+          .replace(/^\s*[\*＊※]+\s*/g, "")
+          .replace(/\s*必須\s*$/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function neighborTextBefore(el: Element): string {
+        const MAX = 200;
+        let n: ChildNode | null = el.previousSibling;
+        while (n) {
+          if (n.nodeType === Node.TEXT_NODE) {
+            const t = n.textContent?.replace(/\s+/g, " ").trim() ?? "";
+            if (t) return t.slice(0, MAX);
+          } else if (n.nodeType === Node.ELEMENT_NODE) {
+            const e = n as Element;
+            const tag = e.tagName.toLowerCase();
+            if (
+              tag === "label" ||
+              tag === "span" ||
+              tag === "p" ||
+              tag === "div" ||
+              tag === "strong" ||
+              tag === "b"
+            ) {
+              const t = e.textContent?.replace(/\s+/g, " ").trim() ?? "";
+              if (t && t.length <= MAX) return t;
+            }
+          }
+          n = n.previousSibling;
+        }
+
+        const prevEl = el.previousElementSibling;
+        if (prevEl) {
+          const t = prevEl.textContent?.replace(/\s+/g, " ").trim() ?? "";
+          if (t && t.length <= MAX) return t;
+        }
+
         return "";
-      };
+      }
+
+      function typeFallbackLabel(
+        el: Element,
+        tag: string,
+        typeAttr: string | undefined,
+      ): string {
+        const t = (typeAttr ?? "").toLowerCase();
+        if (tag === "textarea") return "お問い合わせ内容";
+        if (t === "email") return "メールアドレス";
+        if (t === "tel") return "電話番号";
+        if (tag === "select") return "選択項目";
+        return "";
+      }
+
+      function extractLabel(el: Element): { label: string; rawLabel: string } {
+        const tag = el.tagName.toLowerCase();
+        const typeAttr = el.getAttribute("type") ?? undefined;
+        const nameAttr = el.getAttribute("name") ?? "";
+        const placeholder = el.getAttribute("placeholder") ?? "";
+
+        let raw = "";
+
+        const id = el.getAttribute("id");
+        const RAW_MAX = 400;
+
+        if (id) {
+          const sel = `label[for="${escapeForAttributeSelector(id)}"]`;
+          const labelEl = document.querySelector(sel);
+          if (labelEl?.textContent?.trim()) {
+            raw = labelEl.textContent.trim().slice(0, RAW_MAX);
+          }
+        }
+
+        if (!raw) {
+          const parentLabel = el.closest("label");
+          if (parentLabel?.textContent?.trim()) {
+            raw = parentLabel.textContent.trim().slice(0, RAW_MAX);
+          }
+        }
+
+        if (!raw) {
+          raw = neighborTextBefore(el);
+        }
+
+        if (!raw && placeholder) {
+          raw = placeholder;
+        }
+
+        const rawLabel = raw || placeholder || nameAttr;
+        let cleaned = cleanLabelText(raw);
+
+        if (!cleaned) {
+          cleaned = typeFallbackLabel(el, tag, typeAttr);
+        }
+        if (!cleaned) {
+          cleaned = nameAttr.trim() || "未分類";
+        }
+
+        return { label: cleaned, rawLabel };
+      }
 
       const elements = Array.from(
         document.querySelectorAll("input, textarea, select"),
@@ -58,15 +164,23 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
           const tag = el.tagName.toLowerCase() as "input" | "textarea" | "select";
           const name = el.getAttribute("name") ?? "";
           const placeholder = el.getAttribute("placeholder") ?? "";
-          const label = getLabel(el);
           const type = el.getAttribute("type") ?? undefined;
-          return { tag, type, name, placeholder, label };
+          const { label, rawLabel } = extractLabel(el);
+          return { tag, type, name, placeholder, label, rawLabel };
         })
         .filter((field) => {
           const excludedTypes = ["hidden", "submit", "button", "reset", "file"];
           return !field.type || !excludedTypes.includes(field.type);
         });
     });
+
+    for (const f of fields) {
+      console.log({
+        rawLabel: f.rawLabel,
+        cleanedLabel: f.label,
+        name: f.name,
+      });
+    }
 
     return fields;
   } finally {

@@ -3,7 +3,7 @@ import type { OwnCompanyProfile } from "./googleSheets";
 import { parseJapaneseAddress } from "./addressParse";
 
 export type GeneratedFormField = {
-  fieldName: string;
+  label: string;
   value: string;
 };
 
@@ -13,17 +13,18 @@ function sheet(raw: string | undefined): string {
   return raw?.trim() ?? "";
 }
 
-function fieldLabelForDisplay(field: FormField): string {
-  const fromLabel = field.label?.trim();
-  if (fromLabel) return fromLabel;
-  const fromName = field.name?.trim();
-  if (fromName) return fromName;
-  return field.placeholder?.trim() || "項目";
+/** スクレイピング済みの人間向けラベルを優先（field_0 は表示しない） */
+function displayLabel(field: FormField): string {
+  const L = field.label?.trim();
+  if (L && L !== "未分類") return L;
+  const ph = field.placeholder?.trim();
+  if (ph) return ph;
+  return "項目";
 }
 
 /** ラベル／プレースホルダ用（name 属性は含めない — 誤マッチ防止） */
 function labelText(field: FormField): string {
-  return `${field.label ?? ""} ${field.placeholder ?? ""}`.trim();
+  return `${displayLabel(field)} ${field.placeholder ?? ""}`.trim();
 }
 
 function labelLower(field: FormField): string {
@@ -354,7 +355,7 @@ export function buildFormFieldValues(
     });
 
     return {
-      fieldName: fieldLabelForDisplay(field),
+      label: displayLabel(field),
       value,
     };
   });

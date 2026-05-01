@@ -9,7 +9,7 @@ import {
 } from "react";
 
 type GeneratedField = {
-  fieldName: string;
+  label: string;
   value: string;
 };
 
@@ -203,12 +203,12 @@ export default function HomePage() {
           ) : (
             result.generatedFields.map((item, idx) => (
               <article
-                key={`${item.fieldName}-${idx}`}
+                key={`${item.label}-${idx}`}
                 className="flex items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm"
               >
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-600">
-                    {item.fieldName}
+                    {item.label}
                   </p>
                   <p className="whitespace-pre-wrap break-all text-slate-900">
                     {item.value}
