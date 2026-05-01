@@ -8,6 +8,9 @@ import {
   useState,
 } from "react";
 
+const WEBHOOK_BASE =
+  "https://nextasia.app.n8n.cloud/webhook/ee28d078-59ea-4054-88d3-fed205d5c289";
+
 type GeneratedField = {
   label: string;
   value: string;
@@ -65,15 +68,46 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** 日本時間を ISO 風に（例: 2026-05-01T12:34:56+09:00） */
+function timestampJstISO(): string {
+  const d = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  })
+    .formatToParts(d)
+    .reduce<Record<string, string>>((acc, p) => {
+      acc[p.type] = p.value;
+      return acc;
+    }, {});
+
+  const y = parts.year;
+  const mo = parts.month;
+  const da = parts.day;
+  const h = parts.hour;
+  const mi = parts.minute;
+  const s = parts.second;
+  return `${y}-${mo}-${da}T${h}:${mi}:${s}+09:00`;
+}
+
 export default function HomePage() {
   const [companyUrl, setCompanyUrl] = useState("");
   const [contactUrl, setContactUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApiResult | null>(null);
 
   const formInvalid = !companyUrl.trim() || !contactUrl.trim();
   const submitDisabled = formInvalid || loading;
+  const saveEnabled =
+    result !== null && !error && !loading && !saving;
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -129,6 +163,34 @@ export default function HomePage() {
     }
   };
 
+  const handleSave = async () => {
+    if (!saveEnabled) return;
+
+    const webUrl = companyUrl.trim();
+    const contact = contactUrl.trim();
+    const timestamp = timestampJstISO();
+
+    const url = `${WEBHOOK_BASE}?${new URLSearchParams({
+      timestamp,
+      webUrl,
+      contactUrl: contact,
+      status: "completed",
+    }).toString()}`;
+
+    setSaving(true);
+    try {
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      alert("保存しました");
+    } catch {
+      alert("送信失敗");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <main className="mx-auto min-h-screen max-w-4xl p-6 md:p-10">
       <h1 className="mb-8 text-2xl font-bold md:text-3xl">営業支援ツール</h1>
@@ -143,7 +205,7 @@ export default function HomePage() {
             placeholder="https://example.com"
             value={companyUrl}
             onChange={(e) => setCompanyUrl(e.target.value)}
-            disabled={loading}
+            disabled={loading || saving}
             className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:cursor-not-allowed disabled:bg-slate-100"
             required
           />
@@ -158,24 +220,42 @@ export default function HomePage() {
             placeholder="https://example.com/contact"
             value={contactUrl}
             onChange={(e) => setContactUrl(e.target.value)}
-            disabled={loading}
+            disabled={loading || saving}
             className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:cursor-not-allowed disabled:bg-slate-100"
             required
           />
         </section>
 
-        <button
-          type="submit"
-          disabled={submitDisabled}
-          className="rounded-lg bg-slate-900 px-6 py-2 font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-        >
-          {loading ? "処理中..." : "次へ"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            disabled={submitDisabled}
+            className="rounded-lg bg-slate-900 px-6 py-2 font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+          >
+            {loading ? "処理中..." : "AIでスクレイピングする"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={!saveEnabled}
+            className="rounded-lg border border-slate-300 bg-white px-6 py-2 font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "送信中..." : "保存する"}
+          </button>
+        </div>
       </form>
 
       {loading && (
-        <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-4 text-blue-700">
-          処理中です。自社情報を読み込み中（スプレッドシート）...
+        <div className="mt-6 rounded-xl border border-blue-200 bg-white p-5 shadow-sm">
+          <p className="mb-3 text-sm font-medium text-slate-700">
+            AIが企業情報を解析中...
+          </p>
+          <div className="loading-bar" aria-hidden>
+            <div className="loading-progress" />
+          </div>
+          <div className="loading-dot-track" aria-hidden>
+            <div className="loading-dot" />
+          </div>
         </div>
       )}
 
@@ -185,6 +265,12 @@ export default function HomePage() {
           role="alert"
         >
           {error}
+        </div>
+      )}
+
+      {saving && !loading && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-600">
+          n8n へ送信中...
         </div>
       )}
 
