@@ -18,6 +18,7 @@ type ApiResult = {
   salesMessage: string;
   generatedFields: GeneratedField[];
   error?: string;
+  scrapeWarning?: string;
 };
 
 function CopyButton({ text }: { text: string }) {
@@ -66,6 +67,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApiResult | null>(null);
+  const [scrapeWarning, setScrapeWarning] = useState<string | null>(null);
 
   const isDisabled = useMemo(
     () => !companyUrl.trim() || !contactUrl.trim() || loading,
@@ -77,6 +79,7 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setScrapeWarning(null);
 
     try {
       const res = await fetch("/api/generate", {
@@ -91,6 +94,9 @@ export default function HomePage() {
       }
 
       setResult(data);
+      if (data.scrapeWarning) {
+        setScrapeWarning(data.scrapeWarning);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "エラーが発生しました。");
     } finally {
@@ -149,6 +155,12 @@ export default function HomePage() {
       {error && (
         <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
           {error}
+        </div>
+      )}
+
+      {scrapeWarning && (
+        <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+          {scrapeWarning}
         </div>
       )}
 

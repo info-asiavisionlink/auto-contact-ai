@@ -1,10 +1,26 @@
 import puppeteer from "puppeteer-core";
 
+import {
+  applyStealthLikePageDefaults,
+  GOTO_OPTIONS,
+} from "./puppeteerPage";
+import { retry } from "./retry";
+import {
+  fallbackCompanyNameFromUrl,
+  fetchPageTitleFallback,
+} from "./scrapeFallback";
+
 export type CompanyInfo = {
   companyName: string;
   address: string;
   phone: string;
   rawText: string;
+};
+
+export type ScrapeCompanyOutcome = {
+  success: boolean;
+  data: CompanyInfo;
+  error?: string;
 };
 
 function pickByRegex(text: string, regexes: RegExp[], fallback = ""): string {
@@ -17,7 +33,7 @@ function pickByRegex(text: string, regexes: RegExp[], fallback = ""): string {
   return fallback;
 }
 
-export async function scrapeCompanyInfo(url: string): Promise<CompanyInfo> {
+async function scrapeCompanyOnce(url: string): Promise<CompanyInfo> {
   if (!process.env.BROWSERLESS_API_KEY) {
     throw new Error("BROWSERLESS_API_KEYが未設定です");
   }
@@ -31,7 +47,8 @@ export async function scrapeCompanyInfo(url: string): Promise<CompanyInfo> {
     });
 
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await applyStealthLikePageDefaults(page);
+    await page.goto(url, GOTO_OPTIONS);
 
     const pageText = await page.evaluate(() => {
       const text = document.body?.innerText ?? "";
@@ -61,10 +78,34 @@ export async function scrapeCompanyInfo(url: string): Promise<CompanyInfo> {
       phone,
       rawText: pageText.slice(0, 5000),
     };
-  } catch (error) {
-    console.error(error);
-    throw error;
   } finally {
     await browser?.close();
+  }
+}
+
+/**
+ * 企業サイトのスクレイピング。失敗しても例外は投げず、フォールバックで続行可能な形で返す。
+ */
+export async function scrapeCompanyInfo(url: string): Promise<ScrapeCompanyOutcome> {
+  try {
+    const data = await retry(() => scrapeCompanyOnce(url), 2);
+    return { success: true, data };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    console.error("Scraping failed:", message);
+
+    const title = await fetchPageTitleFallback(url);
+    const data: CompanyInfo = {
+      companyName: fallbackCompanyNameFromUrl(url, title),
+      address: "",
+      phone: "",
+      rawText: "",
+    };
+    return {
+      success: false,
+      data,
+      error: "スクレイピング失敗",
+    };
   }
 }

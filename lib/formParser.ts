@@ -1,5 +1,11 @@
 import puppeteer from "puppeteer-core";
 
+import {
+  applyStealthLikePageDefaults,
+  GOTO_OPTIONS,
+} from "./puppeteerPage";
+import { retry } from "./retry";
+
 export type FormField = {
   tag: "input" | "textarea" | "select";
   type?: string;
@@ -8,7 +14,13 @@ export type FormField = {
   label: string;
 };
 
-export async function parseFormFields(url: string): Promise<FormField[]> {
+export type ParseFormOutcome = {
+  success: boolean;
+  data: FormField[];
+  error?: string;
+};
+
+async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
   if (!process.env.BROWSERLESS_API_KEY) {
     throw new Error("BROWSERLESS_API_KEYが未設定です");
   }
@@ -22,7 +34,8 @@ export async function parseFormFields(url: string): Promise<FormField[]> {
     });
 
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+    await applyStealthLikePageDefaults(page);
+    await page.goto(url, GOTO_OPTIONS);
 
     const fields = await page.evaluate(() => {
       const getLabel = (el: Element): string => {
@@ -56,10 +69,26 @@ export async function parseFormFields(url: string): Promise<FormField[]> {
     });
 
     return fields;
-  } catch (error) {
-    console.error(error);
-    throw error;
   } finally {
     await browser?.close();
+  }
+}
+
+/**
+ * 問い合わせフォーム解析。失敗時は空配列を返し、全体処理は止めない。
+ */
+export async function parseFormFields(url: string): Promise<ParseFormOutcome> {
+  try {
+    const data = await retry(() => parseFormFieldsOnce(url), 2);
+    return { success: true, data };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    console.error("Form parse failed:", message);
+    return {
+      success: false,
+      data: [],
+      error: "スクレイピング失敗",
+    };
   }
 }

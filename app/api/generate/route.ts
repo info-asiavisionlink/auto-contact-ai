@@ -18,11 +18,20 @@ export async function POST(req: Request) {
       );
     }
 
-    const [companyInfo, formFields, ownCompanyInfo] = await Promise.all([
+    const [companyOutcome, formOutcome, ownCompanyInfo] = await Promise.all([
       scrapeCompanyInfo(companyUrl),
       parseFormFields(contactUrl),
       getCompanyProfileFromSheet(),
     ]);
+
+    const companyInfo = companyOutcome.data;
+    const formFields = formOutcome.data;
+
+    const scrapePartialFailure =
+      !companyOutcome.success || !formOutcome.success;
+    const scrapeWarning = scrapePartialFailure
+      ? "一部サイトの取得に失敗しましたが、続行します"
+      : undefined;
 
     const { salesMessage } = await generateSalesMessage({
       ownCompanyInfo,
@@ -41,6 +50,7 @@ export async function POST(req: Request) {
       formFields,
       salesMessage,
       generatedFields,
+      scrapeWarning,
     });
   } catch (error) {
     const message =
