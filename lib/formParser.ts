@@ -6,17 +6,17 @@ import {
 } from "./puppeteerPage";
 import { retry } from "./retry";
 
+/**
+ * 網羅優先：すべての input / textarea / select を返す（取りこぼし禁止）
+ */
 export type FormField = {
-  tag: "input" | "textarea" | "select";
-  type?: string;
-  name: string;
-  placeholder: string;
-  /** 画面表示・マッピング用（整形済み） */
   label: string;
-  /** 抽出直後（デバッグ用） */
-  rawLabel: string;
-  /** ラベル取得元（デバッグ用） */
-  labelSource: string;
+  name: string;
+  type: string;
+  placeholder: string;
+  rawHTML: string;
+  /** 値マッピング用 */
+  tag: "input" | "textarea" | "select";
 };
 
 export type ParseFormOutcome = {
@@ -43,7 +43,8 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
     await page.goto(url, GOTO_OPTIONS);
 
     const fields = await page.evaluate(() => {
-      const RAW_MAX = 400;
+      const RAW_HTML_MAX = 8000;
+      const CHUNK_MAX = 500;
 
       function escapeForAttributeSelector(id: string): string {
         if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
@@ -52,24 +53,11 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
         return id.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       }
 
-      function cleanLabelText(s: string): string {
-        return s
-          .replace(/※必須/g, "")
-          .replace(/※\s*必須?/gi, "")
-          .replace(/\(\s*必須\s*\)/gi, "")
-          .replace(/\[\s*必須\s*\]/gi, "")
-          .replace(/\*\s*必須?/gi, "")
-          .replace(/【\s*必須\s*】/gi, "")
-          .replace(/^\s*[\*＊※]+\s*/g, "")
-          .replace(/\s*必須\s*$/gi, "")
-          .replace(/\s+/g, " ")
-          .trim();
+      function trimLabel(s: string): string {
+        return s.replace(/\s+/g, " ").trim();
       }
 
-      /**
-       * <dt>…</dt><dd>…input…</dd> および入れ子の dl に対応
-       */
-      function labelFromDtDd(el: Element): { raw: string; source: string } | null {
+      function labelFromDtDd(el: Element): string {
         const dd = el.closest("dd");
         if (dd) {
           let node: ChildNode | null = dd.previousSibling;
@@ -78,19 +66,13 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
               const e = node as HTMLElement;
               if (e.tagName.toLowerCase() === "dt") {
                 const t =
-                  e.innerText?.trim() || e.textContent?.trim() || "";
-                if (t) {
-                  return {
-                    raw: t.slice(0, RAW_MAX),
-                    source: "dt/dd",
-                  };
-                }
+                  trimLabel(e.innerText || e.textContent || "");
+                if (t) return t.slice(0, CHUNK_MAX);
               }
             }
             node = node.previousSibling;
           }
         }
-
         const dl = el.closest("dl");
         if (dl) {
           const dds = Array.from(dl.querySelectorAll("dd"));
@@ -100,131 +82,186 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
             const idx = dds.indexOf(containing);
             if (idx >= 0 && idx < dts.length) {
               const dtEl = dts[idx] as HTMLElement;
-              const t =
-                dtEl.innerText?.trim() ||
-                dtEl.textContent?.trim() ||
-                "";
-              if (t) {
-                return {
-                  raw: t.slice(0, RAW_MAX),
-                  source: "dt/dd-pair",
-                };
-              }
+              const t = trimLabel(
+                dtEl.innerText || dtEl.textContent || "",
+              );
+              if (t) return t.slice(0, CHUNK_MAX);
             }
           }
         }
-
-        return null;
-      }
-
-      function typeFallbackLabel(
-        el: Element,
-        tag: string,
-        typeAttr: string | undefined,
-      ): string {
-        const t = (typeAttr ?? "").toLowerCase();
-        if (tag === "textarea") return "お問い合わせ内容";
-        if (t === "email") return "メールアドレス";
-        if (t === "tel") return "電話番号";
-        if (tag === "select") return "選択項目";
         return "";
       }
 
-      function extractLabel(el: Element): {
-        label: string;
-        rawLabel: string;
-        labelSource: string;
-      } {
-        const tag = el.tagName.toLowerCase();
-        const typeAttr = el.getAttribute("type") ?? undefined;
-        const nameAttr = el.getAttribute("name") ?? "";
-        const placeholder = el.getAttribute("placeholder") ?? "";
+      function precedingTextNodes(el: Element): string {
+        let n: ChildNode | null = el.previousSibling;
+        let steps = 0;
+        while (n && steps < 30) {
+          if (n.nodeType === Node.TEXT_NODE) {
+            const t = trimLabel(n.textContent || "");
+            if (t) return t.slice(0, CHUNK_MAX);
+          } else if (n.nodeType === Node.ELEMENT_NODE) {
+            const e = n as Element;
+            const tag = e.tagName.toLowerCase();
+            if (
+              tag === "label" ||
+              tag === "span" ||
+              tag === "p" ||
+              tag === "div" ||
+              tag === "strong" ||
+              tag === "b"
+            ) {
+              const t = trimLabel(e.textContent || "");
+              if (t && t.length <= CHUNK_MAX) return t;
+            }
+          }
+          n = n.previousSibling;
+          steps++;
+        }
+        return "";
+      }
 
-        let raw = "";
-        let labelSource = "fallback";
+      function nearbyDivPSpanText(el: Element): string {
+        let sib: Element | null = el.previousElementSibling;
+        let steps = 0;
+        while (sib && steps < 8) {
+          const tag = sib.tagName.toLowerCase();
+          if (tag === "div" || tag === "p" || tag === "span") {
+            const t = trimLabel(sib.textContent || "");
+            if (t && t.length <= CHUNK_MAX) return t;
+          }
+          sib = sib.previousElementSibling;
+          steps++;
+        }
 
+        let parent: Element | null = el.parentElement;
+        let pdepth = 0;
+        while (parent && pdepth < 4) {
+          let psib: Element | null = parent.previousElementSibling;
+          let q = 0;
+          while (psib && q < 4) {
+            const tag = psib.tagName.toLowerCase();
+            if (tag === "div" || tag === "p" || tag === "span") {
+              const t = trimLabel(psib.textContent || "");
+              if (t && t.length <= CHUNK_MAX) return t;
+            }
+            psib = psib.previousElementSibling;
+            q++;
+          }
+          parent = parent.parentElement;
+          pdepth++;
+        }
+        return "";
+      }
+
+      /**
+       * 指定順で試し、最初に得られた非空文字列を返す
+       */
+      function resolveLabel(el: Element, index: number): string {
         const id = el.getAttribute("id");
+        const placeholder = el.getAttribute("placeholder") || "";
+        const nameAttr = el.getAttribute("name") || "";
+        const aria = el.getAttribute("aria-label") || "";
 
-        // 1. label[for]
+        const attempts: string[] = [];
+
         if (id) {
           const sel = `label[for="${escapeForAttributeSelector(id)}"]`;
           const labelEl = document.querySelector(sel);
-          if (labelEl?.textContent?.trim()) {
-            raw = labelEl.textContent.trim().slice(0, RAW_MAX);
-            labelSource = "label-for";
+          if (labelEl?.textContent) {
+            attempts.push(trimLabel(labelEl.textContent));
           }
         }
 
-        // 2. closest(label)
-        if (!raw) {
-          const parentLabel = el.closest("label");
-          if (parentLabel?.textContent?.trim()) {
-            raw = parentLabel.textContent.trim().slice(0, RAW_MAX);
-            labelSource = "label-wrap";
-          }
+        const parentLabel = el.closest("label");
+        if (parentLabel?.textContent) {
+          attempts.push(trimLabel(parentLabel.textContent));
         }
 
-        // 3. dt（dl / dt / dd）
-        if (!raw) {
-          const dtHit = labelFromDtDd(el);
-          if (dtHit) {
-            raw = dtHit.raw;
-            labelSource = dtHit.source;
-          }
+        if (placeholder) attempts.push(trimLabel(placeholder));
+        if (nameAttr) attempts.push(trimLabel(nameAttr));
+        if (aria) attempts.push(trimLabel(aria));
+
+        const prec = precedingTextNodes(el);
+        if (prec) attempts.push(prec);
+
+        const dt = labelFromDtDd(el);
+        if (dt) attempts.push(dt);
+
+        const dps = nearbyDivPSpanText(el);
+        if (dps) attempts.push(dps);
+
+        for (const a of attempts) {
+          if (a) return a.slice(0, CHUNK_MAX);
         }
 
-        // 4. placeholder
-        if (!raw && placeholder) {
-          raw = placeholder.slice(0, RAW_MAX);
-          labelSource = "placeholder";
-        }
+        return `不明フィールド${index}`;
+      }
 
-        // 5. name（raw として使用し、整形は後段）
-        if (!raw && nameAttr) {
-          raw = nameAttr.slice(0, RAW_MAX);
-          labelSource = "name";
-        }
-
-        const rawLabel = raw || placeholder || nameAttr;
-        let cleaned = cleanLabelText(raw);
-
-        if (!cleaned) {
-          cleaned = typeFallbackLabel(el, tag, typeAttr);
-          if (cleaned) labelSource = `${labelSource}+type`;
-        }
-        if (!cleaned) {
-          cleaned = nameAttr.trim() || "未分類";
-          labelSource = "name-only";
-        }
-
-        return { label: cleaned, rawLabel, labelSource };
+      function elementType(el: Element, tag: string): string {
+        if (tag === "textarea") return "textarea";
+        if (tag === "select") return "select";
+        return (el.getAttribute("type") || "text").toLowerCase();
       }
 
       const elements = Array.from(
         document.querySelectorAll("input, textarea, select"),
       );
 
-      return elements
-        .map((el) => {
-          const tag = el.tagName.toLowerCase() as "input" | "textarea" | "select";
-          const name = el.getAttribute("name") ?? "";
-          const placeholder = el.getAttribute("placeholder") ?? "";
-          const type = el.getAttribute("type") ?? undefined;
-          const { label, rawLabel, labelSource } = extractLabel(el);
-          return { tag, type, name, placeholder, label, rawLabel, labelSource };
-        })
-        .filter((field) => {
-          const excludedTypes = ["hidden", "submit", "button", "reset", "file"];
-          return !field.type || !excludedTypes.includes(field.type);
+      const out: Array<{
+        label: string;
+        name: string;
+        type: string;
+        placeholder: string;
+        rawHTML: string;
+        tag: "input" | "textarea" | "select";
+      }> = [];
+
+      elements.forEach((el, index) => {
+        const tag = el.tagName.toLowerCase() as "input" | "textarea" | "select";
+        const name = el.getAttribute("name") || "";
+        const placeholder = el.getAttribute("placeholder") || "";
+        const type = elementType(el, tag);
+        const label = resolveLabel(el, index);
+        let rawHTML = "";
+        try {
+          rawHTML = el.outerHTML || "";
+          if (rawHTML.length > RAW_HTML_MAX) {
+            rawHTML = rawHTML.slice(0, RAW_HTML_MAX) + "…";
+          }
+        } catch {
+          rawHTML = "";
+        }
+
+        out.push({
+          label,
+          name,
+          type,
+          placeholder,
+          rawHTML,
+          tag,
         });
+      });
+
+      if (out.length === 0) {
+        out.push({
+          label: "不明フィールド0",
+          name: "",
+          type: "",
+          placeholder: "",
+          rawHTML: "",
+          tag: "input",
+        });
+      }
+
+      return out;
     });
 
     for (const f of fields) {
       console.log({
         label: f.label,
-        source: f.labelSource,
-        rawLabel: f.rawLabel,
         name: f.name,
+        placeholder: f.placeholder,
+        type: f.type,
       });
     }
 
@@ -234,9 +271,6 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
   }
 }
 
-/**
- * 問い合わせフォーム解析。失敗時は空配列を返し、全体処理は止めない。
- */
 export async function parseFormFields(url: string): Promise<ParseFormOutcome> {
   try {
     const data = await retry(() => parseFormFieldsOnce(url), 2);
@@ -247,7 +281,16 @@ export async function parseFormFields(url: string): Promise<ParseFormOutcome> {
     console.error("Form parse failed:", message);
     return {
       success: false,
-      data: [],
+      data: [
+        {
+          label: "不明フィールド0",
+          name: "",
+          type: "",
+          placeholder: "",
+          rawHTML: "",
+          tag: "input",
+        },
+      ],
       error: "スクレイピング失敗",
     };
   }
