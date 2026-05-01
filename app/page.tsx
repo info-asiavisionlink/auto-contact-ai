@@ -144,6 +144,21 @@ export default function HomePage() {
     console.log("送信開始");
     console.log({ companyUrl: trimmedCompany, contactUrl: trimmedContact });
 
+    const now = new Date();
+    const jst = new Date(
+      now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }),
+    );
+    const formattedTime =
+      jst.getFullYear() +
+      "年" +
+      String(jst.getMonth() + 1).padStart(2, "0") +
+      "月" +
+      String(jst.getDate()).padStart(2, "0") +
+      "日 " +
+      String(jst.getHours()).padStart(2, "0") +
+      ":" +
+      String(jst.getMinutes()).padStart(2, "0");
+
     setSaving(true);
     try {
       const res = await fetch(WEBHOOK_BASE, {
@@ -155,7 +170,7 @@ export default function HomePage() {
           companyUrl: trimmedCompany,
           contactUrl: trimmedContact,
           status: "完了",
-          timestamp: new Date().toISOString(),
+          timestamp: formattedTime,
         }),
       });
 

@@ -4,11 +4,14 @@ import Papa from "papaparse";
 
 /**
  * スプレッドシート想定カラム:
- * company_name, name, phone, email, postcode, address, service_*, …, lp_url, document_url, line_url, cta_message
+ * company_name, name, name_フリガナ, phone, email, postcode, address, service_*, …,
+ * lp_url, document_url, line_url, cta_message
  * および従来の contact_person_* ヘッダにも対応
  */
 export type OwnCompanyProfile = {
   company_name: string;
+  /** シート列 name_フリガナ（ASCIIなら name_furigana） */
+  name_furigana: string;
   email: string;
   phone: string;
   postcode: string;
@@ -47,9 +50,11 @@ function normalizeProfileFromRow(row: ParsedRow): OwnCompanyProfile {
   const email = cell(row, ["contact_person_email", "email"]);
   const phone = cell(row, ["contact_person_phone", "phone"]);
   const contactName = cell(row, ["contact_person_name", "name"]);
+  const furigana = cell(row, ["name_フリガナ", "name_furigana"]);
 
   return {
     company_name: cell(row, ["company_name"]),
+    name_furigana: furigana,
     email,
     phone,
     postcode: cell(row, ["postcode", "zip", "postal_code", "郵便番号"]),

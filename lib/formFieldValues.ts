@@ -60,6 +60,16 @@ function personNameValue(profile: OwnCompanyProfile): string {
   return v;
 }
 
+/** フリガナ列 → 空なら氏名と同じ値でフォールバック（シートの name がある場合に取りこぼし防止） */
+function furiganaValue(profile: OwnCompanyProfile): string {
+  let v = sheet(profile.name_furigana);
+  if (containsHttp(v)) {
+    v = "";
+  }
+  if (v) return v;
+  return personNameValue(profile);
+}
+
 function phoneValue(profile: OwnCompanyProfile): string {
   let v = sheet(profile.contact_person_phone);
   if (!v || containsHttp(v)) {
@@ -101,8 +111,39 @@ function isPhoneLabel(field: FormField): boolean {
   );
 }
 
+function isFuriganaLabel(field: FormField): boolean {
+  const t = labelLower(field);
+  if (t.includes("フリガナ") || t.includes("ふりがな")) return true;
+  if (
+    t.includes("お名前（フリガナ）") ||
+    t.includes("お名前(フリガナ)") ||
+    t.includes("氏名（カナ）") ||
+    t.includes("氏名(カナ)") ||
+    t.includes("名前（カナ）") ||
+    t.includes("名前(カナ)")
+  ) {
+    return true;
+  }
+  if (t.includes("（フリガナ）") || t.includes("(フリガナ)")) return true;
+  if (t.includes("（カナ）") || t.includes("(カナ)")) return true;
+  if (t.includes("（かな）") || t.includes("(かな)")) return true;
+  if (
+    (t.includes("カナ") || t.includes("かな")) &&
+    (t.includes("氏名") ||
+      t.includes("名前") ||
+      t.includes("お名前") ||
+      t.includes("読み") ||
+      t.includes("ヨミ"))
+  ) {
+    return true;
+  }
+  if (t.includes("ヨミガナ") || t.includes("読みがな")) return true;
+  return false;
+}
+
 function isPersonNameLabel(field: FormField): boolean {
   const t = labelLower(field);
+  if (isFuriganaLabel(field)) return false;
   if (
     t.includes("会社名") ||
     t.includes("法人名") ||
@@ -186,6 +227,20 @@ function resolveFieldValue(
 
   // ① name 属性 完全一致（最優先）
   if (
+    n === "name_furigana" ||
+    n === "name-furigana" ||
+    n === "name_kana" ||
+    n === "name-kana" ||
+    n === "name_フリガナ" ||
+    n === "furigana" ||
+    n === "kana" ||
+    n === "name_katakana" ||
+    n === "your-name-kana" ||
+    n === "your_name_kana"
+  ) {
+    return furiganaValue(profile);
+  }
+  if (
     n === "your-name" ||
     n === "your_name" ||
     n === "fullname" ||
@@ -266,6 +321,9 @@ function resolveFieldValue(
   if (isFullAddressLabel(field)) {
     return sheet(profile.address);
   }
+  if (isFuriganaLabel(field)) {
+    return furiganaValue(profile);
+  }
   if (isPersonNameLabel(field)) {
     return personNameValue(profile);
   }
@@ -320,6 +378,27 @@ export function buildFormFieldValues(
       if (containsHttp(raw)) {
         raw = emailValue(profile);
       }
+    }
+    // フリガナ系
+    if (
+      isFuriganaLabel(field) ||
+      [
+        "name_furigana",
+        "name-furigana",
+        "name_kana",
+        "name-kana",
+        "name_フリガナ",
+        "furigana",
+        "kana",
+        "name_katakana",
+        "your-name-kana",
+        "your_name_kana",
+      ].includes((field.name || "").trim().toLowerCase())
+    ) {
+      if (containsHttp(raw)) {
+        raw = furiganaValue(profile);
+      }
+      raw = stripUrlsForNonMessage(raw);
     }
     // 氏名系
     if (
