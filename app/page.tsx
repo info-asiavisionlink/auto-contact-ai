@@ -4,7 +4,6 @@ import {
   FormEvent,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -17,8 +16,13 @@ type GeneratedField = {
 type ApiResult = {
   salesMessage: string;
   generatedFields: GeneratedField[];
-  error?: string;
   scrapeWarning?: string;
+};
+
+const EMPTY_RESULT: ApiResult = {
+  salesMessage: "",
+  generatedFields: [],
+  scrapeWarning: "一部取得失敗",
 };
 
 function CopyButton({ text }: { text: string }) {
@@ -67,38 +71,59 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ApiResult | null>(null);
-  const [scrapeWarning, setScrapeWarning] = useState<string | null>(null);
 
-  const isDisabled = useMemo(
-    () => !companyUrl.trim() || !contactUrl.trim() || loading,
-    [companyUrl, contactUrl, loading],
-  );
+  const formInvalid = !companyUrl.trim() || !contactUrl.trim();
+  const submitDisabled = formInvalid || loading;
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (submitDisabled) return;
+
+    console.log("submit start");
     setLoading(true);
     setError(null);
     setResult(null);
-    setScrapeWarning(null);
 
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyUrl, contactUrl }),
+        body: JSON.stringify({
+          companyUrl: companyUrl.trim(),
+          contactUrl: contactUrl.trim(),
+        }),
       });
-      const data = (await res.json()) as ApiResult;
 
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "生成に失敗しました。");
+      let data: Partial<ApiResult> & { error?: string } = {};
+      try {
+        data = (await res.json()) as Partial<ApiResult> & { error?: string };
+      } catch {
+        throw new Error("レスポンスの解析に失敗しました。");
       }
 
-      setResult(data);
-      if (data.scrapeWarning) {
-        setScrapeWarning(data.scrapeWarning);
+      console.log("response:", { ok: res.ok, status: res.status, data });
+
+      if (!res.ok) {
+        throw new Error(data.error || "APIエラー");
       }
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      const next: ApiResult = {
+        salesMessage: typeof data.salesMessage === "string" ? data.salesMessage : "",
+        generatedFields: Array.isArray(data.generatedFields)
+          ? data.generatedFields
+          : [],
+        scrapeWarning: data.scrapeWarning,
+      };
+
+      setResult(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "エラーが発生しました。");
+      console.error(err);
+      setError("処理中にエラーが発生しました。再試行してください。");
+      setResult({ ...EMPTY_RESULT });
     } finally {
       setLoading(false);
     }
@@ -118,7 +143,8 @@ export default function HomePage() {
             placeholder="https://example.com"
             value={companyUrl}
             onChange={(e) => setCompanyUrl(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            disabled={loading}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:cursor-not-allowed disabled:bg-slate-100"
             required
           />
         </section>
@@ -132,17 +158,18 @@ export default function HomePage() {
             placeholder="https://example.com/contact"
             value={contactUrl}
             onChange={(e) => setContactUrl(e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+            disabled={loading}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:cursor-not-allowed disabled:bg-slate-100"
             required
           />
         </section>
 
         <button
           type="submit"
-          disabled={isDisabled}
+          disabled={submitDisabled}
           className="rounded-lg bg-slate-900 px-6 py-2 font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
         >
-          次へ
+          {loading ? "処理中..." : "次へ"}
         </button>
       </form>
 
@@ -153,35 +180,44 @@ export default function HomePage() {
       )}
 
       {error && (
-        <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
+        <div
+          className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700"
+          role="alert"
+        >
           {error}
         </div>
       )}
 
-      {scrapeWarning && (
-        <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-          {scrapeWarning}
-        </div>
-      )}
-
-      {result && (
+      {result !== null && (
         <section className="mt-8 space-y-3">
-          {result.generatedFields.map((item, idx) => (
-            <article
-              key={`${item.fieldName}-${idx}`}
-              className="flex items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm"
-            >
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-600">
-                  {item.fieldName}
-                </p>
-                <p className="whitespace-pre-wrap break-all text-slate-900">
-                  {item.value}
-                </p>
-              </div>
-              <CopyButton text={item.value} />
-            </article>
-          ))}
+          {result.scrapeWarning && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+              {result.scrapeWarning}
+            </div>
+          )}
+
+          {result.generatedFields.length === 0 ? (
+            <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-600">
+              コピー用のフォーム項目がありません。
+            </p>
+          ) : (
+            result.generatedFields.map((item, idx) => (
+              <article
+                key={`${item.fieldName}-${idx}`}
+                className="flex items-center justify-between gap-3 rounded-xl border bg-white p-4 shadow-sm"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-600">
+                    {item.fieldName}
+                  </p>
+                  <p className="whitespace-pre-wrap break-all text-slate-900">
+                    {item.value}
+                  </p>
+                </div>
+                <CopyButton text={item.value} />
+              </article>
+            ))
+          )}
         </section>
       )}
     </main>
