@@ -68,34 +68,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** 日本時間を ISO 風に（例: 2026-05-01T12:34:56+09:00） */
-function timestampJstISO(): string {
-  const d = new Date();
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  })
-    .formatToParts(d)
-    .reduce<Record<string, string>>((acc, p) => {
-      acc[p.type] = p.value;
-      return acc;
-    }, {});
-
-  const y = parts.year;
-  const mo = parts.month;
-  const da = parts.day;
-  const h = parts.hour;
-  const mi = parts.minute;
-  const s = parts.second;
-  return `${y}-${mo}-${da}T${h}:${mi}:${s}+09:00`;
-}
-
 export default function HomePage() {
   const [companyUrl, setCompanyUrl] = useState("");
   const [contactUrl, setContactUrl] = useState("");
@@ -166,25 +138,37 @@ export default function HomePage() {
   const handleSave = async () => {
     if (!saveEnabled) return;
 
-    const webUrl = companyUrl.trim();
-    const contact = contactUrl.trim();
-    const timestamp = timestampJstISO();
+    const trimmedCompany = companyUrl.trim();
+    const trimmedContact = contactUrl.trim();
 
-    const url = `${WEBHOOK_BASE}?${new URLSearchParams({
-      timestamp,
-      webUrl,
-      contactUrl: contact,
-      status: "completed",
-    }).toString()}`;
+    console.log("送信開始");
+    console.log({ companyUrl: trimmedCompany, contactUrl: trimmedContact });
 
     setSaving(true);
     try {
-      const res = await fetch(url, { method: "GET" });
+      const res = await fetch(WEBHOOK_BASE, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          companyUrl: trimmedCompany,
+          contactUrl: trimmedContact,
+          status: "完了",
+          timestamp: new Date().toISOString(),
+        }),
+      });
+
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        throw new Error("Webhook送信失敗");
       }
+
+      const data = await res.text();
+      console.log("Webhook success:", data);
+
       alert("保存しました");
-    } catch {
+    } catch (err) {
+      console.error("Webhook error:", err);
       alert("送信失敗");
     } finally {
       setSaving(false);
@@ -237,7 +221,7 @@ export default function HomePage() {
           <button
             type="button"
             onClick={() => void handleSave()}
-            disabled={!saveEnabled}
+            disabled={!saveEnabled || saving}
             className="rounded-lg border border-slate-300 bg-white px-6 py-2 font-medium text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? "送信中..." : "保存する"}
