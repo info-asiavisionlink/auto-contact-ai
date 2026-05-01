@@ -15,6 +15,8 @@ export type FormField = {
   label: string;
   /** 抽出直後（デバッグ用） */
   rawLabel: string;
+  /** ラベル取得元（デバッグ用） */
+  labelSource: string;
 };
 
 export type ParseFormOutcome = {
@@ -41,6 +43,8 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
     await page.goto(url, GOTO_OPTIONS);
 
     const fields = await page.evaluate(() => {
+      const RAW_MAX = 400;
+
       function escapeForAttributeSelector(id: string): string {
         if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
           return CSS.escape(id);
@@ -50,6 +54,7 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
 
       function cleanLabelText(s: string): string {
         return s
+          .replace(/※必須/g, "")
           .replace(/※\s*必須?/gi, "")
           .replace(/\(\s*必須\s*\)/gi, "")
           .replace(/\[\s*必須\s*\]/gi, "")
@@ -61,38 +66,55 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
           .trim();
       }
 
-      function neighborTextBefore(el: Element): string {
-        const MAX = 200;
-        let n: ChildNode | null = el.previousSibling;
-        while (n) {
-          if (n.nodeType === Node.TEXT_NODE) {
-            const t = n.textContent?.replace(/\s+/g, " ").trim() ?? "";
-            if (t) return t.slice(0, MAX);
-          } else if (n.nodeType === Node.ELEMENT_NODE) {
-            const e = n as Element;
-            const tag = e.tagName.toLowerCase();
-            if (
-              tag === "label" ||
-              tag === "span" ||
-              tag === "p" ||
-              tag === "div" ||
-              tag === "strong" ||
-              tag === "b"
-            ) {
-              const t = e.textContent?.replace(/\s+/g, " ").trim() ?? "";
-              if (t && t.length <= MAX) return t;
+      /**
+       * <dt>…</dt><dd>…input…</dd> および入れ子の dl に対応
+       */
+      function labelFromDtDd(el: Element): { raw: string; source: string } | null {
+        const dd = el.closest("dd");
+        if (dd) {
+          let node: ChildNode | null = dd.previousSibling;
+          while (node) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const e = node as HTMLElement;
+              if (e.tagName.toLowerCase() === "dt") {
+                const t =
+                  e.innerText?.trim() || e.textContent?.trim() || "";
+                if (t) {
+                  return {
+                    raw: t.slice(0, RAW_MAX),
+                    source: "dt/dd",
+                  };
+                }
+              }
+            }
+            node = node.previousSibling;
+          }
+        }
+
+        const dl = el.closest("dl");
+        if (dl) {
+          const dds = Array.from(dl.querySelectorAll("dd"));
+          const dts = Array.from(dl.querySelectorAll("dt"));
+          const containing = dds.find((d) => d.contains(el));
+          if (containing && dts.length > 0) {
+            const idx = dds.indexOf(containing);
+            if (idx >= 0 && idx < dts.length) {
+              const dtEl = dts[idx] as HTMLElement;
+              const t =
+                dtEl.innerText?.trim() ||
+                dtEl.textContent?.trim() ||
+                "";
+              if (t) {
+                return {
+                  raw: t.slice(0, RAW_MAX),
+                  source: "dt/dd-pair",
+                };
+              }
             }
           }
-          n = n.previousSibling;
         }
 
-        const prevEl = el.previousElementSibling;
-        if (prevEl) {
-          const t = prevEl.textContent?.replace(/\s+/g, " ").trim() ?? "";
-          if (t && t.length <= MAX) return t;
-        }
-
-        return "";
+        return null;
       }
 
       function typeFallbackLabel(
@@ -108,38 +130,59 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
         return "";
       }
 
-      function extractLabel(el: Element): { label: string; rawLabel: string } {
+      function extractLabel(el: Element): {
+        label: string;
+        rawLabel: string;
+        labelSource: string;
+      } {
         const tag = el.tagName.toLowerCase();
         const typeAttr = el.getAttribute("type") ?? undefined;
         const nameAttr = el.getAttribute("name") ?? "";
         const placeholder = el.getAttribute("placeholder") ?? "";
 
         let raw = "";
+        let labelSource = "fallback";
 
         const id = el.getAttribute("id");
-        const RAW_MAX = 400;
 
+        // 1. label[for]
         if (id) {
           const sel = `label[for="${escapeForAttributeSelector(id)}"]`;
           const labelEl = document.querySelector(sel);
           if (labelEl?.textContent?.trim()) {
             raw = labelEl.textContent.trim().slice(0, RAW_MAX);
+            labelSource = "label-for";
           }
         }
 
+        // 2. closest(label)
         if (!raw) {
           const parentLabel = el.closest("label");
           if (parentLabel?.textContent?.trim()) {
             raw = parentLabel.textContent.trim().slice(0, RAW_MAX);
+            labelSource = "label-wrap";
           }
         }
 
+        // 3. dt（dl / dt / dd）
         if (!raw) {
-          raw = neighborTextBefore(el);
+          const dtHit = labelFromDtDd(el);
+          if (dtHit) {
+            raw = dtHit.raw;
+            labelSource = dtHit.source;
+          }
         }
 
+        // 4. placeholder
         if (!raw && placeholder) {
-          raw = placeholder;
+          raw = placeholder.slice(0, RAW_MAX);
+          labelSource = "placeholder";
+        }
+
+        // 5. name（raw として使用し、整形は後段）
+        if (!raw && nameAttr) {
+          raw = nameAttr.slice(0, RAW_MAX);
+          labelSource = "name";
         }
 
         const rawLabel = raw || placeholder || nameAttr;
@@ -147,12 +190,14 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
 
         if (!cleaned) {
           cleaned = typeFallbackLabel(el, tag, typeAttr);
+          if (cleaned) labelSource = `${labelSource}+type`;
         }
         if (!cleaned) {
           cleaned = nameAttr.trim() || "未分類";
+          labelSource = "name-only";
         }
 
-        return { label: cleaned, rawLabel };
+        return { label: cleaned, rawLabel, labelSource };
       }
 
       const elements = Array.from(
@@ -165,8 +210,8 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
           const name = el.getAttribute("name") ?? "";
           const placeholder = el.getAttribute("placeholder") ?? "";
           const type = el.getAttribute("type") ?? undefined;
-          const { label, rawLabel } = extractLabel(el);
-          return { tag, type, name, placeholder, label, rawLabel };
+          const { label, rawLabel, labelSource } = extractLabel(el);
+          return { tag, type, name, placeholder, label, rawLabel, labelSource };
         })
         .filter((field) => {
           const excludedTypes = ["hidden", "submit", "button", "reset", "file"];
@@ -176,8 +221,9 @@ async function parseFormFieldsOnce(url: string): Promise<FormField[]> {
 
     for (const f of fields) {
       console.log({
+        label: f.label,
+        source: f.labelSource,
         rawLabel: f.rawLabel,
-        cleanedLabel: f.label,
         name: f.name,
       });
     }
