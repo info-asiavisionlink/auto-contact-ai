@@ -115,7 +115,7 @@ ${JSON.stringify(ownCompanyInfo, null, 2)}
 ${JSON.stringify(formFields, null, 2)}
 
 ## 出力形式
-次のJSONのみ返す。salesMessage には番号・箇条書き・見出しを付けず、**1つの連続した文章**（必要なら句読点のみ）とする。URLは文中に自然に挿入してよい。
+次のJSONのみ返す。salesMessage は**読みやすい営業文**とし、段落ごとに改行（\\n）を入れてよい。見出し番号（①②など）は付けない。URLは行末に置くなど自然に配置してよい（後工程でも整形される）。
 { "salesMessage": "営業メッセージ本文" }
 `;
 

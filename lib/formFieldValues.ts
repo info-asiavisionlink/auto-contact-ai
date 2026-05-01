@@ -7,14 +7,15 @@ export type GeneratedFormField = {
   value: string;
 };
 
+const UNSET = "未設定";
+
 function norm(s: string): string {
   return s.trim().toLowerCase();
 }
 
-/** スプレッドシートの値。存在すればそのまま、なければ空文字。 */
+/** スプレッドシートの値（空は空文字） */
 function sheet(raw: string | undefined): string {
-  const t = raw?.trim() ?? "";
-  return t;
+  return raw?.trim() ?? "";
 }
 
 function fieldLabelForDisplay(field: FormField): string {
@@ -25,118 +26,153 @@ function fieldLabelForDisplay(field: FormField): string {
   return field.placeholder?.trim() || "項目";
 }
 
-/**
- * フォーム項目の値はすべて「自社（Googleスプレッドシート）」のみ。
- * 相手企業のスクレイピング結果はここでは一切使わない。
- * 営業文テキストは salesMessage のみ（問い合わせ内容系）。
- */
-export function buildFormFieldValues(
-  formFields: FormField[],
-  profile: OwnCompanyProfile,
-  salesMessage: string,
-): GeneratedFormField[] {
-  const addressParts = parseJapaneseAddress(sheet(profile.address));
-
-  const result: GeneratedFormField[] = [];
-
-  for (const field of formFields) {
-    const name = norm(field.name);
-    const label = field.label ?? "";
-    const labelN = norm(label);
-    const haystack = `${name} ${labelN} ${norm(field.placeholder)}`;
-
-    let value = "";
-
-    // --- 明示 name マッピング（要件どおり・自社のみ）---
-    if (name === "your-name" || name === "your_name") {
-      value = sheet(profile.contact_person_name);
-    } else if (name === "your-email" || name === "your_email") {
-      value = sheet(profile.contact_person_email);
-    } else if (name === "tel-number" || name === "tel_number") {
-      value = sheet(profile.contact_person_phone);
-    } else if (name === "your-pref" || name === "your_pref") {
-      value = sheet(addressParts.pref);
-    } else if (name === "your-city" || name === "your_city") {
-      value = sheet(addressParts.city);
-    } else if (name === "your-addnum" || name === "your_addnum") {
-      value = sheet(addressParts.addnum);
-    } else if (name === "name" || name === "fullname" || name === "yourname") {
-      value = sheet(profile.contact_person_name);
-    } else if (name === "email" || name === "mail" || name === "e-mail") {
-      value = sheet(profile.contact_person_email);
-    } else if (name === "tel" || name === "phone" || name === "telephone") {
-      value = sheet(profile.contact_person_phone);
-    } else if (
-      name === "postcode" ||
-      name === "zip" ||
-      name === "postal"
-    ) {
-      value = sheet(addressParts.postcode);
-    } else if (
-      /氏名|お名前|担当者名/.test(label) &&
-      !/会社|法人|御社|貴社/.test(label)
-    ) {
-      value = sheet(profile.contact_person_name);
-    } else if (/メール|e-mail|email|mail/.test(labelN) && field.tag !== "textarea") {
-      value = sheet(profile.contact_person_email);
-    } else if (/電話|携帯|tel|phone/.test(labelN) && field.tag !== "textarea") {
-      value = sheet(profile.contact_person_phone);
-    } else if (/郵便|〒|postcode|zip|postal/.test(haystack)) {
-      value = sheet(addressParts.postcode);
-    } else if (/都道府県/.test(label)) {
-      value = sheet(addressParts.pref);
-    } else if (/市区町村/.test(label)) {
-      value = sheet(addressParts.city);
-    } else if (/番地|建物|以降の住所|丁目|号室|マンション/.test(label)) {
-      value = sheet(addressParts.addnum);
-    } else if (
-      field.tag !== "textarea" &&
-      (/住所|所在地/.test(label) ||
-        name.includes("address") ||
-        name === "your-address")
-    ) {
-      value = sheet(profile.address);
-    } else if (
-      /会社|社名|法人名/.test(label) ||
-      name.includes("company")
-    ) {
-      value = sheet(profile.company_name);
-    } else if (isInquiryContentField(field, haystack)) {
-      value = sheet(salesMessage);
-    } else {
-      value = "";
-    }
-
-    if (!value) {
-      continue;
-    }
-
-    result.push({
-      fieldName: fieldLabelForDisplay(field),
-      value: value,
-    });
-  }
-
-  return result;
-}
-
-function isInquiryContentField(field: FormField, haystack: string): boolean {
+function isMessageField(field: FormField, haystack: string): boolean {
   if (
-    /住所|所在地|番地|建物|address|郵便|〒|都道府県|市区町村|丁目|号室/.test(
+    /住所|所在地|address|郵便|番地|建物|丁目|号室|都道府県|市区町村/.test(
       haystack,
     )
   ) {
     return false;
   }
-  if (field.tag === "textarea") {
-    return true;
-  }
   if (
-    /お問い合わせ|問い合わせ内容|内容|メッセージ|詳細|ご相談|inquiry|message|body|content/.test(
+    /message|inquiry|body|content|お問い合わせ|問い合わせ|詳細|ご相談|field_3|your-message|contact-message|contact_message|mail-message|your_message|inquiry_message/.test(
       haystack,
     )
   ) {
     return true;
   }
+  if (field.tag === "textarea") {
+    return true;
+  }
   return false;
+}
+
+function resolveFieldValue(
+  field: FormField,
+  profile: OwnCompanyProfile,
+  addressParts: ReturnType<typeof parseJapaneseAddress>,
+  formattedMessage: string,
+): string {
+  const name = norm(field.name);
+  const label = field.label ?? "";
+  const labelN = norm(label);
+  const haystack = `${name} ${labelN} ${norm(field.placeholder)}`;
+
+  // Contact Form 7 等: field_1 + ラベルで判定
+  if (/^field_\d+$/i.test(field.name.trim())) {
+    if (/お名前|氏名|ご担当|name/i.test(label)) {
+      return sheet(profile.contact_person_name);
+    }
+    if (/メール|e-mail|email|mail/i.test(label)) {
+      return sheet(profile.contact_person_email);
+    }
+    if (/電話|携帯|tel|phone|TEL/i.test(label)) {
+      return sheet(profile.contact_person_phone);
+    }
+    if (
+      field.tag === "textarea" ||
+      /お問い合わせ|内容|メッセージ|message|ご用件/.test(label)
+    ) {
+      return formattedMessage.trim();
+    }
+  }
+
+  if (name === "your-name" || name === "your_name") {
+    return sheet(profile.contact_person_name);
+  }
+  if (name === "your-email" || name === "your_email") {
+    return sheet(profile.contact_person_email);
+  }
+  if (name === "tel-number" || name === "tel_number") {
+    return sheet(profile.contact_person_phone);
+  }
+  if (name === "your-pref" || name === "your_pref") {
+    return sheet(addressParts.pref);
+  }
+  if (name === "your-city" || name === "your_city") {
+    return sheet(addressParts.city);
+  }
+  if (name === "your-addnum" || name === "your_addnum") {
+    return sheet(addressParts.addnum);
+  }
+  if (name === "name" || name === "fullname" || name === "yourname") {
+    return sheet(profile.contact_person_name);
+  }
+  if (
+    name === "email" ||
+    name === "mail" ||
+    name === "e-mail" ||
+    field.type === "email"
+  ) {
+    return sheet(profile.contact_person_email);
+  }
+  if (name === "tel" || name === "phone" || name === "telephone") {
+    return sheet(profile.contact_person_phone);
+  }
+  if (name === "postcode" || name === "zip" || name === "postal") {
+    return sheet(addressParts.postcode);
+  }
+  if (/郵便|〒|postcode|zip|postal/.test(haystack)) {
+    return sheet(addressParts.postcode);
+  }
+  if (/都道府県/.test(label)) {
+    return sheet(addressParts.pref);
+  }
+  if (/市区町村/.test(label)) {
+    return sheet(addressParts.city);
+  }
+  if (/番地|建物|以降の住所|丁目|号室|マンション/.test(label)) {
+    return sheet(addressParts.addnum);
+  }
+  if (
+    field.tag !== "textarea" &&
+    (/住所|所在地/.test(label) ||
+      name.includes("address") ||
+      name === "your-address")
+  ) {
+    return sheet(profile.address);
+  }
+  if (/会社|社名|法人名|御社名|貴社名/.test(label) || name.includes("company")) {
+    return sheet(profile.company_name);
+  }
+  if (/氏名|お名前|担当者名/.test(label) && !/会社|法人|御社|貴社/.test(label)) {
+    return sheet(profile.contact_person_name);
+  }
+  if (/メール|e-mail|email|mail/.test(labelN) && field.tag !== "textarea") {
+    return sheet(profile.contact_person_email);
+  }
+  if (/電話|携帯/.test(labelN) && field.tag !== "textarea") {
+    return sheet(profile.contact_person_phone);
+  }
+  if (isMessageField(field, haystack)) {
+    return formattedMessage.trim();
+  }
+
+  return "";
+}
+
+/**
+ * 取得したフォーム構造と1対1でカードを生成。値が空なら「未設定」。
+ * 値は自社スプレッドシート＋整形済み営業文のみ。
+ */
+export function buildFormFieldValues(
+  formFields: FormField[],
+  profile: OwnCompanyProfile,
+  formattedSalesMessage: string,
+): GeneratedFormField[] {
+  const addressParts = parseJapaneseAddress(sheet(profile.address));
+
+  return formFields.map((field) => {
+    const raw = resolveFieldValue(
+      field,
+      profile,
+      addressParts,
+      formattedSalesMessage,
+    );
+    const value = raw.trim() ? raw.trim() : UNSET;
+    return {
+      fieldName: fieldLabelForDisplay(field),
+      value,
+    };
+  });
 }

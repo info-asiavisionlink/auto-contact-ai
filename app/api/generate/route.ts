@@ -4,6 +4,7 @@ import { parseFormFields } from "@/lib/formParser";
 import { getCompanyProfileFromSheet } from "@/lib/googleSheets";
 import { generateSalesMessage } from "@/lib/openai";
 import { buildFormFieldValues } from "@/lib/formFieldValues";
+import { formatSalesMessage } from "@/lib/formatSalesMessage";
 
 export async function POST(req: Request) {
   try {
@@ -39,16 +40,21 @@ export async function POST(req: Request) {
       formFields,
     });
 
+    const salesMessageFormatted = formatSalesMessage(
+      salesMessage,
+      ownCompanyInfo,
+    );
+
     const generatedFields = buildFormFieldValues(
       formFields,
       ownCompanyInfo,
-      salesMessage,
+      salesMessageFormatted,
     );
 
     return NextResponse.json({
       companyInfo,
       formFields,
-      salesMessage,
+      salesMessage: salesMessageFormatted,
       generatedFields,
       scrapeWarning,
     });
